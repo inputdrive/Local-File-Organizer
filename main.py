@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 
 from file_utils import (
@@ -24,7 +25,63 @@ from image_data_processing import (
 )
 
 from output_filter import filter_specific_output  # Import the context manager
-from nexa.gguf import NexaVLMInference, NexaTextInference  # Import model classes
+
+try:
+    from nexa.gguf import NexaVLMInference, NexaTextInference
+except ImportError:  # pragma: no cover - runtime dependency is optional until install
+    NexaVLMInference = None
+    NexaTextInference = None
+
+
+class HFTextInferenceAdapter:
+    """Minimal adapter for Hugging Face text generation pipelines."""
+
+    def __init__(self, pipe):
+        self.pipe = pipe
+
+    def create_completion(self, prompt):
+        outputs = self.pipe(
+            prompt,
+            max_new_tokens=300,
+            do_sample=True,
+            temperature=0.5,
+            return_full_text=False,
+        )
+        generated_text = outputs[0].get('generated_text', '').strip() if isinstance(outputs, list) else str(outputs).strip()
+        return {'choices': [{'text': generated_text}]}
+
+
+class HFImageInferenceAdapter:
+    """Minimal adapter for Hugging Face image captioning pipelines."""
+
+    def __init__(self, pipe):
+        self.pipe = pipe
+
+    def _chat(self, prompt, image_path):
+        description = self.pipe(image_path, max_new_tokens=128)[0].get('generated_text', '').strip()
+
+        def generator():
+            yield {'choices': [{'delta': {'content': description}}]}
+
+        return generator()
+
+
+def _load_hf_backends():
+    """Load the local Hugging Face fallback if the Nexa SDK is unavailable."""
+    try:
+        from transformers import pipeline
+    except ImportError as exc:  # pragma: no cover - install dependency is required
+        raise RuntimeError(
+            "Neither the Nexa SDK nor Hugging Face transformers are available. Install with "
+            "'pip install -r requirements.txt' or 'pip install transformers torch'."
+        ) from exc
+
+    text_model = os.environ.get('LOCAL_TEXT_MODEL', 'TinyLlama/TinyLlama-1.1B-Chat-v1.0')
+    image_model = os.environ.get('LOCAL_IMAGE_MODEL', 'Salesforce/blip-image-captioning-base')
+
+    text_pipe = pipeline('text-generation', model=text_model, tokenizer=text_model, device_map='auto')
+    image_pipe = pipeline('image-to-text', model=image_model, device_map='auto')
+    return HFImageInferenceAdapter(image_pipe), HFTextInferenceAdapter(text_pipe)
 
 def ensure_nltk_data():
     """Ensure that NLTK data is downloaded efficiently and quietly."""
@@ -40,14 +97,14 @@ text_inference = None
 def initialize_models():
     """Initialize the models if they haven't been initialized yet."""
     global image_inference, text_inference
-    if image_inference is None or text_inference is None:
-        # Initialize the models
+    if image_inference is not None and text_inference is not None:
+        return
+
+    if NexaVLMInference is not None and NexaTextInference is not None:
         model_path = "llava-v1.6-vicuna-7b:q4_0"
         model_path_text = "Llama3.2-3B-Instruct:q3_K_M"
 
-        # Use the filter_specific_output context manager
         with filter_specific_output():
-            # Initialize the image inference model
             image_inference = NexaVLMInference(
                 model_path=model_path,
                 local_path=None,
@@ -56,27 +113,36 @@ def initialize_models():
                 max_new_tokens=3000,
                 top_k=3,
                 top_p=0.2,
-                profiling=False
-                # add n_ctx if out of context window usage: n_ctx=2048
+                profiling=False,
             )
 
-            # Initialize the text inference model
             text_inference = NexaTextInference(
                 model_path=model_path_text,
                 local_path=None,
                 stop_words=[],
                 temperature=0.5,
-                max_new_tokens=3000,  # Adjust as needed
+                max_new_tokens=3000,
                 top_k=3,
                 top_p=0.3,
-                profiling=False
-                # add n_ctx if out of context window usage: n_ctx=2048
-
+                profiling=False,
             )
         print("**----------------------------------------------**")
         print("**       Image inference model initialized      **")
         print("**       Text inference model initialized       **")
         print("**----------------------------------------------**")
+        return
+
+    try:
+        image_inference, text_inference = _load_hf_backends()
+    except RuntimeError:
+        raise RuntimeError(
+            "No supported local model backend was found. Install either the Nexa SDK or the Hugging Face local runtime "
+            "with 'pip install -r requirements.txt' or 'pip install transformers torch'."
+        )
+
+    print("**----------------------------------------------**")
+    print("**      Hugging Face inference backend ready    **")
+    print("**----------------------------------------------**")
 
 def simulate_directory_tree(operations, base_path):
     """Simulate the directory tree based on the proposed operations."""
@@ -110,7 +176,7 @@ def get_yes_no(prompt):
             return False
         elif response == '/exit':
             print("Exiting program.")
-            exit()
+            sys.exit()
         else:
             print("Please enter 'yes' or 'no'. To exit, type '/exit'.")
 
@@ -124,7 +190,7 @@ def get_mode_selection():
         response = input("Enter 1, 2, or 3 (or type '/exit' to exit): ").strip()
         if response == '/exit':
             print("Exiting program.")
-            exit()
+            sys.exit()
         elif response == '1':
             return 'content'
         elif response == '2':
@@ -134,12 +200,44 @@ def get_mode_selection():
         else:
             print("Invalid selection. Please enter 1, 2, or 3. To exit, type '/exit'.")
 
+
+def normalize_path(path):
+    """Expand user variables and strip wrapper quotes from user-entered paths."""
+    if path is None:
+        return path
+
+    normalized = str(path).strip()
+    if not normalized:
+        return normalized
+
+    normalized = normalized.strip('"\'')
+    normalized = os.path.expanduser(normalized)
+    normalized = os.path.expandvars(normalized)
+    return os.path.normpath(normalized)
+
+
+def validate_output_path(input_path, output_path):
+    """Reject output directories that would recurse into the source directory."""
+    input_abs = os.path.abspath(normalize_path(input_path))
+    output_abs = os.path.abspath(normalize_path(output_path))
+
+    if output_abs == input_abs:
+        raise ValueError("Output directory must be different from the input directory.")
+
+    try:
+        common_path = os.path.commonpath([input_abs, output_abs])
+    except ValueError:
+        return output_abs
+
+    if common_path == input_abs:
+        raise ValueError("Output directory cannot be inside the input directory.")
+
+    return output_abs
+
+
 def main():
     # Ensure NLTK data is downloaded efficiently and quietly
     ensure_nltk_data()
-
-    # Start with dry run set to True
-    dry_run = True
 
     # Display silent mode explanation before asking
     print("-" * 50)
@@ -156,7 +254,7 @@ def main():
             print("-" * 50)
 
         # Get input and output paths once per directory
-        input_path = input("Enter the path of the directory you want to organize: ").strip()
+        input_path = normalize_path(input("Enter the path of the directory you want to organize: ").strip())
         while not os.path.exists(input_path):
             message = f"Input path {input_path} does not exist. Please enter a valid path."
             if silent_mode:
@@ -164,7 +262,7 @@ def main():
                     f.write(message + '\n')
             else:
                 print(message)
-            input_path = input("Enter the path of the directory you want to organize: ").strip()
+            input_path = normalize_path(input("Enter the path of the directory you want to organize: ").strip())
 
         # Confirm successful input path
         message = f"Input path successfully uploaded: {input_path}"
@@ -177,10 +275,22 @@ def main():
             print("-" * 50)
 
         # Default output path is a folder named "organized_folder" in the same directory as the input path
-        output_path = input("Enter the path to store organized files and folders (press Enter to use 'organized_folder' in the input directory): ").strip()
-        if not output_path:
-            # Get the parent directory of the input path and append 'organized_folder'
-            output_path = os.path.join(os.path.dirname(input_path), 'organized_folder')
+        while True:
+            output_path = normalize_path(input("Enter the path to store organized files and folders (press Enter to use 'organized_folder' in the input directory): ").strip())
+            if not output_path:
+                # Get the parent directory of the input path and append 'organized_folder'
+                output_path = os.path.join(os.path.dirname(input_path), 'organized_folder')
+
+            try:
+                output_path = validate_output_path(input_path, output_path)
+                break
+            except ValueError as exc:
+                message = f"Invalid output path: {exc} Please choose another directory."
+                if silent_mode:
+                    with open(log_file, 'a') as f:
+                        f.write(message + '\n')
+                else:
+                    print(message)
 
         # Confirm successful output path
         message = f"Output path successfully set to: {output_path}"
@@ -225,9 +335,6 @@ def main():
                     print("*" * 50)
                     print("The file upload was successful. Processing may take a few minutes.")
                     print("*" * 50)
-
-                # Prepare to collect link type statistics
-                link_type_counts = {'hardlink': 0, 'symlink': 0}
 
                 # Separate files by type
                 image_files, text_files = separate_files_by_type(file_paths)

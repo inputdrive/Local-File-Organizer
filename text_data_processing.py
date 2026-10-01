@@ -1,12 +1,12 @@
-import re
 import os
+import re
 import time
-import nltk
-from nltk.tokenize import word_tokenize, sent_tokenize
+
 from nltk.corpus import stopwords
-from nltk.probability import FreqDist
 from nltk.stem import WordNetLemmatizer
-from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn
+from nltk.tokenize import word_tokenize
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+
 from data_processing_common import sanitize_filename
 
 def summarize_text_content(text, text_inference):
@@ -122,15 +122,15 @@ Category:"""
     progress.update(task_id, advance=1 / total_steps)
 
     # Remove unwanted words and stopwords
-    unwanted_words = set([
+    unwanted_words = {
         'the', 'and', 'based', 'generated', 'this', 'is', 'filename', 'file', 'document', 'text', 'output', 'only', 'below', 'category',
         'summary', 'key', 'details', 'information', 'note', 'notes', 'main', 'ideas', 'concepts', 'in', 'on', 'of', 'with', 'by', 'for',
         'to', 'from', 'a', 'an', 'as', 'at', 'i', 'we', 'you', 'they', 'he', 'she', 'it', 'that', 'which', 'are', 'were', 'was', 'be',
         'have', 'has', 'had', 'do', 'does', 'did', 'but', 'if', 'or', 'because', 'about', 'into', 'through', 'during', 'before', 'after',
         'above', 'below', 'any', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so',
         'than', 'too', 'very', 's', 't', 'can', 'will', 'just', 'don', 'should', 'now', 'new', 'depicts', 'show', 'shows', 'display',
-        'illustrates', 'presents', 'features', 'provides', 'covers', 'includes', 'discusses', 'demonstrates', 'describes'
-    ])
+        'illustrates', 'presents', 'features', 'provides', 'covers', 'includes', 'discusses', 'demonstrates', 'describes',
+    }
     stop_words = set(stopwords.words('english'))
     all_unwanted_words = unwanted_words.union(stop_words)
     lemmatizer = WordNetLemmatizer()

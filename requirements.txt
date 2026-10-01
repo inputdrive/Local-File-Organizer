@@ -8,3 +8,8 @@ xlrd
 nltk
 rich
 python-pptx
+Pillow
+transformers
+torch
+accelerate
+sentencepiece

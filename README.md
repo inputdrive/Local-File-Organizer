@@ -143,21 +143,23 @@ Activate the environment:
 conda activate local_file_organizer
 ```
 
-### 4. Install Nexa SDK ️
+### 4. Install a local inference backend
 
-#### CPU Installation
-To install the CPU version of Nexa SDK, run:
+This project now supports a local Hugging Face fallback when the older Nexa package is unavailable or blocked by a 403/binary issue.
+
+#### Recommended: Hugging Face local models
+
+Install the required Python dependencies:
+
 ```bash
-pip install nexaai --prefer-binary --index-url https://nexaai.github.io/nexa-sdk/whl/cpu --extra-index-url https://pypi.org/simple --no-cache-dir
+pip install -r requirements.txt
 ```
 
-#### GPU Installation (Metal - macOS)
-For the GPU version supporting Metal (macOS), run:
-```bash
-CMAKE_ARGS="-DGGML_METAL=ON -DSD_METAL=ON" pip install nexaai --prefer-binary --index-url https://nexaai.github.io/nexa-sdk/whl/metal --extra-index-url https://pypi.org/simple --no-cache-dir
-```
-For detailed installation instructions of Nexa SDK for **CUDA** and **AMD GPU** support, please refer to the [Installation section](https://github.com/NexaAI/nexa-sdk?tab=readme-ov-file#installation) in the main README.
+The app will automatically prefer the Nexa SDK when it is available, but it will fall back to Hugging Face local models if it is not.
 
+#### Optional: Qualcomm AI Hub / GenieX
+
+If you want to experiment with the Qualcomm AI Hub GenieX flow described in the Qualcomm docs, you can use it as an alternative local runtime. The repo’s model-layer interface is intentionally abstracted so the backend can be replaced without changing the organizer logic itself.
 
 ### 5. Install Dependencies 
 
@@ -172,10 +174,10 @@ For detailed installation instructions of Nexa SDK for **CUDA** and **AMD GPU** 
    pip install -r requirements.txt
    ```
 
-**Note:** If you encounter issues with any packages, install them individually:
+**Note:** If you encounter issues while installing the model runtime, install the core libraries directly:
 
 ```zsh
-pip install nexa Pillow pytesseract PyMuPDF python-docx
+pip install transformers torch accelerate sentencepiece Pillow pytesseract PyMuPDF python-docx
 ```
 
 With the environment activated and dependencies installed, run the script using:

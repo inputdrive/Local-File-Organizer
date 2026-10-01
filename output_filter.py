@@ -1,7 +1,7 @@
 # output_filter.py
 
-import sys
 import contextlib
+import sys
 
 @contextlib.contextmanager
 def filter_specific_output():

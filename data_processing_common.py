@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import datetime  # Import datetime for date operations
 from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn
 
@@ -47,8 +48,8 @@ def process_files_by_date(file_paths, output_path, dry_run=False, silent=False, 
         # Prepare new file path
         new_file_name = os.path.basename(file_path)
         new_file_path = os.path.join(dir_path, new_file_name)
-        # Decide whether to use hardlink or symlink
-        link_type = 'hardlink'  # Assume hardlink for now
+        # Default to a safe copy operation; hardlinks are only used when supported.
+        link_type = 'copy'
         # Record the operation
         operation = {
             'source': file_path,
@@ -108,8 +109,8 @@ def process_files_by_type(file_paths, output_path, dry_run=False, silent=False, 
         # Prepare new file path
         new_file_name = os.path.basename(file_path)
         new_file_path = os.path.join(dir_path, new_file_name)
-        # Decide whether to use hardlink or symlink
-        link_type = 'hardlink'  # Assume hardlink for now
+        # Default to a safe copy operation; hardlinks are only used when supported.
+        link_type = 'copy'
         # Record the operation
         operation = {
             'source': file_path,
@@ -145,8 +146,8 @@ def compute_operations(data_list, new_path, renamed_files, processed_files):
             new_file_path = os.path.join(dir_path, new_file_name)
             counter += 1
 
-        # Decide whether to use hardlink or symlink
-        link_type = 'hardlink'  # Assume hardlink for now
+        # Default to a safe copy operation. Hardlinks are attempted only when supported.
+        link_type = 'copy'
 
         # Record the operation
         operation = {
@@ -185,11 +186,18 @@ def execute_operations(operations, dry_run=False, silent=False, log_file=None):
                 os.makedirs(dir_path, exist_ok=True)
 
                 try:
+                    created_kind = link_type
                     if link_type == 'hardlink':
-                        os.link(source, destination)
+                        try:
+                            os.link(source, destination)
+                        except (OSError, NotImplementedError):
+                            shutil.copy2(source, destination)
+                            created_kind = 'copy'
+                    elif link_type == 'copy':
+                        shutil.copy2(source, destination)
                     else:
                         os.symlink(source, destination)
-                    message = f"Created {link_type} from '{source}' to '{destination}'"
+                    message = f"Created {created_kind} from '{source}' to '{destination}'"
                 except Exception as e:
                     message = f"Error creating {link_type} from '{source}' to '{destination}': {e}"
 
